@@ -1,105 +1,157 @@
-# --- 1. IMPORT YOUR TOOLS ---
 import os
 import requests
 from flask import Flask, request
-from openai import OpenAI  # <-- NEW IMPORT
+from openai import OpenAI
 
-# --- 2. SET UP YOUR "PASSWORD" VARIABLES ---
+# --- 1. LOAD ALL SECRET KEYS from Environment Variables ---
+# --- This is the new, secure way to handle tokens ---
+# --- You will set these in your Render.com dashboard ---
 
-# --- Meta Variables ---
-# Find this in your Meta App Dashboard > Messenger > Instagram Settings
-PAGE_ACCESS_TOKEN = 'EAAKvNj7XklIBP7pqARtHQyhiNcj8lLFO3tJHu5DarDeGZCR6Hs5nlcTkQC3oYv9dKcAdZA91ZAwW1H0OqNnek31hudUFa9ZBgaiZAtR5rtDuKF2vDHJZCZCGbGv3UhZCN89ZBhSuk98YYskd8vwTiWgKHXUu3w4NJxWaft4vFKWCVpQU3AxATQg82blnSmjsB0cZCxawcdxzQSKLUPuONMvf9rlBKV' 
-# This is the password YOU made up
-VERIFY_TOKEN = 'my-secret-token-123'
+# OpenRouter Config
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+YOUR_SITE_URL = os.environ.get("YOUR_SITE_URL", "https://my-bot.com")
+YOUR_SITE_NAME = os.environ.get("YOUR_SITE_NAME", "My AI Bot")
 
-# --- OpenRouter Variables ---
-OPENROUTER_API_KEY = "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"
-YOUR_SITE_URL = "https://www.my-bot-project.com" # Optional: Change this to your site
-YOUR_SITE_NAME = "My Instagram AI Bot"          # Optional: Change this to your bot's name
+# Instagram Config
+INSTA_PAGE_ACCESS_TOKEN = os.environ.get("INSTA_PAGE_ACCESS_TOKEN")
+INSTA_VERIFY_TOKEN = os.environ.get("INSTA_VERIFY_TOKEN")
 
-# --- 3. INITIALIZE THE OPENROUTER CLIENT (NEW!) ---
-# We do this once when the app starts for efficiency
+# WhatsApp Config
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN")
+
+# --- 2. INITIALIZE CLIENTS ---
+app = Flask(__name__)
 client = OpenAI(
   base_url="https://openrouter.ai/api/v1",
   api_key=OPENROUTER_API_KEY,
 )
 
-# --- 4. CREATE THE WEB SERVER ---
-app = Flask(__name__)
-
-# --- 5. CREATE THE WEBHOOK "LISTENER" ---
+# --- 3. CREATE THE WEBHOOK "LISTENER" (NOW SMARTER) ---
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
-    
-    # --- 5a. THE 'GET' REQUEST (ONE-TIME VERIFICATION) ---
     if request.method == 'GET':
-        if request.args.get('hub.verify_token') == VERIFY_TOKEN:
-            return request.args.get('hub.challenge')
-        return 'Verification token mismatch', 403
+        # --- WEBHOOK VERIFICATION (Handles BOTH Insta and WA) ---
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
 
-    # --- 5b. THE 'POST' REQUEST (A NEW MESSAGE ARRIVES) ---
+        if mode and token:
+            if mode == 'subscribe' and token == INSTA_VERIFY_TOKEN:
+                print('INSTAGRAM WEBHOOK_VERIFIED')
+                return challenge, 200
+            elif mode == 'subscribe' and token == WHATSAPP_VERIFY_TOKEN:
+                print('WHATSAPP WEBHOOK_VERIFIED')
+                return challenge, 200
+            else:
+                print('VERIFICATION_FAILED')
+                return 'Verification token mismatch', 403
+        else:
+            return 'Missing parameters', 400
+
     elif request.method == 'POST':
+        # --- NEW MESSAGE "ROUTER" (Handles BOTH Insta and WA) ---
         data = request.get_json()
         
+        # Check if this is an Instagram message
         if data.get('object') == 'instagram':
-            for entry in data.get('entry', []):
-                for message in entry.get('messaging', []):
-                    
-                    sender_id = message['sender']['id']
-                    
-                    if message.get('message') and message['message'].get('text'):
-                        text = message['message']['text']
-                        
-                        print(f"Received message from {sender_id}: {text}")
-
-                        # --- 6. YOUR "BRAIN" (OPENROUTER AI) LOGIC ---
-                        # This block is new and uses the OpenRouter SDK
-                        try:
-                            completion = client.chat.completions.create(
-                              extra_headers={
-                                "HTTP-Referer": YOUR_SITE_URL,
-                                "X-Title": YOUR_SITE_NAME,
-                              },
-                              model="z-ai/glm-4.5-air:free", # The free model you requested
-                              messages=[
-                                {
-                                  "role": "user",
-                                  "content": text # Pass the user's message as content
-                                }
-                              ]
-                            )
-                            
-                            # Get the AI's response text
-                            ai_response = completion.choices[0].message.content
-
-                        except Exception as e:
-                            print(f"OPENROUTER AI ERROR: {e}")
-                            ai_response = "Sorry, my AI brain is having a problem right now."
-                        # --- END OF AI LOGIC ---
-
-                        # 7. Send the reply back to the user
-                        send_reply(sender_id, ai_response)
-                        
+            handle_instagram_message(data)
+            
+        # Check if this is a WhatsApp message
+        elif data.get('object') == 'whatsapp_business_account':
+            handle_whatsapp_message(data)
+            
         return 'OK', 200
 
-# --- 8. THE "REPLY" FUNCTION (Unchanged) ---
-def send_reply(recipient_id, text):
-    """Sends a text message reply to the user."""
-    
-    url = f"https://graph.facebook.com/v24.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    
+# --- 4. SEPARATE LOGIC FOR EACH PLATFORM ---
+
+def handle_instagram_message(data):
+    """Parses and replies to an Instagram message."""
+    try:
+        for entry in data.get('entry', []):
+            for message in entry.get('messaging', []):
+                if message.get('message') and message['message'].get('text'):
+                    sender_id = message['sender']['id']
+                    text = message['message']['text']
+                    
+                    print(f"Received Instagram message from {sender_id}: {text}")
+                    ai_response = get_ai_response(text, sender_id)
+                    send_instagram_reply(sender_id, ai_response)
+    except Exception as e:
+        print(f"INSTAGRAM ERROR: {e}")
+
+def handle_whatsapp_message(data):
+    """Parses and replies to a WhatsApp message."""
+    try:
+        entry = data.get('entry', [])[0]
+        change = entry.get('changes', [])[0]
+        value = change.get('value', {})
+        
+        if 'messages' in value:
+            message_data = value['messages'][0]
+            if message_data['type'] == 'text':
+                sender_phone = message_data['from'] # User's phone number
+                text = message_data['text']['body']
+                
+                print(f"Received WhatsApp message from {sender_phone}: {text}")
+                ai_response = get_ai_response(text, sender_phone)
+                send_whatsapp_reply(sender_phone, ai_response)
+    except Exception as e:
+        print(f"WHATSAPP ERROR: {e}")
+
+# --- 5. AI "BRAIN" FUNCTION (Reusable) ---
+
+def get_ai_response(text, user_id):
+    """Gets a reply from the OpenRouter AI."""
+    try:
+        completion = client.chat.completions.create(
+          extra_headers={
+            "HTTP-Referer": YOUR_SITE_URL,
+            "X-Title": YOUR_SITE_NAME,
+          },
+          model="meta-llama/llama-3-8b-instruct:free", # Using a fast, free model
+          messages=[
+            { "role": "system", "content": "You are a helpful assistant." },
+            { "role": "user", "content": text }
+          ]
+        )
+        ai_response = completion.choices[0].message.content
+        return ai_response
+    except Exception as e:
+        print(f"AI ERROR: {e}")
+        return "Sorry, my AI brain is having a problem right now."
+
+# --- 6. SEPARATE "REPLY" FUNCTIONS FOR EACH PLATFORM ---
+
+def send_instagram_reply(recipient_id, text):
+    """Sends a text message reply to Instagram."""
+    url = f"https://graph.facebook.com/v24.0/me/messages?access_token={INSTA_PAGE_ACCESS_TOKEN}"
     payload = {
         'recipient': {'id': recipient_id},
         'message': {'text': text},
         'messaging_type': 'RESPONSE'
     }
-    
     response = requests.post(url, json=payload)
-    print(f"Meta Reply Response: {response.json()}")
+    print(f"Instagram Reply Response: {response.json()}")
 
+def send_whatsapp_reply(recipient_phone, text):
+    """Sends a text message reply to WhatsApp."""
+    url = f"https://graph.facebook.com/v24.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient_phone,
+        "type": "text",
+        "text": { "body": text }
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    print(f"WhatsApp Reply Response: {response.json()}")
 
-# --- 9. START THE SERVER (Unchanged) ---
+# --- 7. START THE SERVER ---
 if __name__ == '__main__':
-    # Make sure to install the openai library: pip install openai
-    app.run(port=5000, debug=True)
+    app.run(port=5000) # Removed debug=True for production
 
