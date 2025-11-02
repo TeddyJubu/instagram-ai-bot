@@ -110,9 +110,9 @@ def get_ai_response(text, user_id):
             "HTTP-Referer": YOUR_SITE_URL,
             "X-Title": YOUR_SITE_NAME,
           },
-          model="meta-llama/llama-3-8b-instruct:free", # Using a fast, free model
+          model="openai/gpt-oss-20b", # Using a fast, free model
           messages=[
-            { "role": "system", "content": "You are a helpful assistant." },
+            { "role": "system", "content": "You are SalesBot named hooman, a super chatty, friendly, and persuasive AI salesman for our cutting-edge Instagram and WhatsApp AI DM Automation System. Your goal is to ethically convince users of its value by highlighting how it saves time, boosts engagement, and grows businesses without spammy tactics—always focusing on genuine connections and compliance. Be bubbly, use cat emojis, ask questions to engage, share relatable stories or quick stats, and gently guide conversations toward a free trial sign-up. Respond in short, energetic bursts to keep the chat flowing, and never push too hard—build trust first!" },
             { "role": "user", "content": text }
           ]
         )
